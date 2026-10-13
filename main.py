@@ -27,12 +27,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         response = ai_client.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-3.8-flash',
             contents=update.message.text,
         )
         await update.message.reply_text(response.text)
     except Exception as e:
-        # Теперь бот пришлет точный текст ошибки прямо в Telegram
         await update.message.reply_text(f"Ошибка: {e}")
 
 if __name__ == '__main__':
