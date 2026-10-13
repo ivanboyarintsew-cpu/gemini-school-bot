@@ -32,10 +32,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await update.message.reply_text(response.text)
     except Exception as e:
-        await update.message.reply_text("Произошла ошибка при ответе. Попробуй позже!")
+        # Теперь бот пришлет точный текст ошибки прямо в Telegram
+        await update.message.reply_text(f"Ошибка: {e}")
 
 if __name__ == '__main__':
-    # Запускаем Flask в отдельном потоке, чтобы Render видел открытый порт
+    # Запускаем Flask в отдельном потоке
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.daemon = True
     flask_thread.start()
