@@ -27,7 +27,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         response = ai_client.models.generate_content(
-            model='gemini-3.7-flash',
+            model='gemini-2.0-flash',
             contents=update.message.text,
         )
         await update.message.reply_text(response.text)
