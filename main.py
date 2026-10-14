@@ -8,20 +8,35 @@ import requests as req
 
 TELEGRAM_TOKEN = "8873295583:AAFkxlPOzOtkjbBuHAQFEVSlL37YB8cBWO8"
 GEMINI_KEY = os.environ.get("GEMINI_KEY") or os.environ.get("GEMINI_API_KEY")
-# Твой точный адрес на Render
 RENDER_URL = "https://gemini-school-bot-t983.onrender.com"
 
 genai.configure(api_key=GEMINI_KEY)
-model = genai.GenerativeModel('gemini-3.1-flash-lite')
+
+# Задаем системную инструкцию: бот сразу знает твое имя и контекст
+model = genai.GenerativeModel(
+    model_name='gemini-3.1-flash-lite',
+    system_instruction="Ты — дружелюбный школьный ИИ-помощник. Собеседника зовут Ваня, он учится в 7 классе. Всегда помни его имя, общайся тепло, поддерживай и помогай с учебой (алгебра и другие предметы)."
+)
+
+# Словарь для хранения истории чатов каждого пользователя
+user_chats = {}
 
 app_flask = Flask(__name__)
 telegram_app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привет! Бот на связи и работает через вебхук без конфликтов.")
+    user_id = update.effective_user.id
+    user_chats[user_id] = model.start_chat(history=[])
+    await update.message.reply_text("Привет, Ваня! Я на связи и теперь отлично всё помню. Чем помочь с учебой или о чем поболтать?")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id not in user_chats:
+        user_chats[user_id] = model.start_chat(history=[])
+    
+    chat = user_chats[user_id]
     response_text = None
+    
     try:
         if update.message.photo:
             photo_file = await update.message.photo[-1].get_file()
@@ -32,16 +47,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "mime_type": "image/jpeg",
                 "data": bytes(photo_bytes)
             }
-            response = model.generate_content([image_part, caption])
+            response = chat.send_message([image_part, caption])
             if response and response.text:
                 response_text = response.text.strip()
                 
         elif update.message.text:
-            response = model.generate_content(update.message.text)
+            response = chat.send_message(update.message.text)
             if response and response.text:
                 response_text = response.text.strip()
     except Exception as e:
         print(f"GenAI Error: {e}")
+        try:
+            user_chats[user_id] = model.start_chat(history=[])
+            chat = user_chats[user_id]
+            if update.message.text:
+                response = chat.send_message(update.message.text)
+                if response and response.text:
+                    response_text = response.text.strip()
+        except Exception as inner_e:
+            print(f"Inner GenAI Error: {inner_e}")
 
     if response_text:
         await update.message.reply_text(response_text)
@@ -68,7 +92,6 @@ def webhook():
     return "OK", 200
 
 if __name__ == '__main__':
-    # Регистрируем вебхук в Telegram при старте
     try:
         req.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={RENDER_URL}/{TELEGRAM_TOKEN}")
     except Exception as e:
