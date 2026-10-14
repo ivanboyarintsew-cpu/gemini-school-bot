@@ -10,8 +10,8 @@ GEMINI_KEY = os.environ.get("GEMINI_KEY")
 
 ai_client = genai.Client(api_key=GEMINI_KEY)
 
-# Хранилище истории сообщений для каждого пользователя: {user_id: [history]}
-user_histories = {}
+# Хранилище истории диалогов: {user_id: "текст переписки"}
+user_sessions = {}
 
 app_flask = Flask(__name__)
 
@@ -25,25 +25,20 @@ def run_flask():
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    # Сбрасываем историю при вызове /start
-    if user_id in user_histories:
-        del user_histories[user_id]
-    await update.message.reply_text("Привет! Я твой ИИ-помощник с памятью и доступом к Google Поиску. Задай мне любой вопрос!")
+    if user_id in user_sessions:
+        del user_sessions[user_id]
+    await update.message.reply_text("Привет! Я твой ИИ-помощник с памятью. Задай мне любой вопрос!")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_message = update.message.text
 
-    if user_id not in user_histories:
-        user_histories[user_id] = []
+    if user_id not in user_sessions:
+        user_sessions[user_id] = ""
 
-    # Добавляем новое сообщение пользователя в историю
-    user_histories[user_id].append({
-        "role": "user",
-        "parts": [{"text": user_message}]
-    })
+    # Формируем накопленный контекст диалога
+    prompt = user_sessions[user_id] + f"\nПользователь: {user_message}\nАссистент:"
 
-    # Список надежных моделей для каскада
     models = ['gemini-3.1-flash-lite', 'gemini-2.5-flash', 'gemini-3.7-flash']
     response_text = None
 
@@ -51,28 +46,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             response = ai_client.models.generate_content(
                 model=model_name,
-                contents=user_histories[user_id],
-                config={
-                    "tools": [{"google_search": {}}]
-                }
+                contents=prompt
             )
             if response and response.text:
-                response_text = response.text
+                response_text = response.text.strip()
                 break
         except Exception as e:
             continue
 
     if response_text:
-        # Сохраняем ответ ИИ в историю, чтобы бот помнил контекст
-        user_histories[user_id].append({
-            "role": "model",
-            "parts": [{"text": response_text}]
-        })
+        # Сохраняем историю
+        user_sessions[user_id] = prompt + " " + response_text
         await update.message.reply_text(response_text)
     else:
-        # При ошибке удаляем последнее сообщение пользователя, чтобы не ломать цепочку
-        user_histories[user_id].pop()
-        await update.message.reply_text("Не удалось получить ответ. Попробуй отправку ещё раз!")
+        await update.message.reply_text("Не удалось получить ответ. Попробуй отправить сообщение ещё раз!")
 
 if __name__ == '__main__':
     flask_thread = threading.Thread(target=run_flask)
