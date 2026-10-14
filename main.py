@@ -1,24 +1,27 @@
 import os
-import asyncio
-from flask import Flask, request
+import threading
+from flask import Flask
 from google import genai
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
-import requests as req
 
 TELEGRAM_TOKEN = "8873295583:AAFkxlPOzOtkjbBuHAQFEVSlL37YB8cBWO8"
 GEMINI_KEY = os.environ.get("GEMINI_KEY") or os.environ.get("GEMINI_API_KEY")
-RENDER_URL = "https://gemini-school-bot-t983.onrender.com"
 
 ai_client = genai.Client(api_key=GEMINI_KEY)
 
 app_flask = Flask(__name__)
 
-# Инициализируем Telegram приложение для вебхуков
-telegram_app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+@app_flask.route('/')
+def home():
+    return "Bot is active and running!"
+
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    app_flask.run(host="0.0.0.0", port=port)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привет! Бот успешно переведен на Webhook и готов помогать с учебой без сбоев.")
+    await update.message.reply_text("Привет! Бот полностью готов к работе. Отправь мне текст или фото!")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     contents = []
@@ -60,32 +63,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("Не удалось получить ответ. Попробуй еще раз!")
 
-telegram_app.add_handler(CommandHandler("start", start))
-telegram_app.add_handler(MessageHandler((filters.TEXT | filters.PHOTO) & ~filters.COMMAND, handle_message))
-
-@app_flask.route('/')
-def home():
-    return "Bot is active and running via Webhook!"
-
-@app_flask.route(f"/{TELEGRAM_TOKEN}", methods=['POST'])
-def webhook():
-    """Принимаем сообщения от Telegram через вебхук."""
-    json_data = request.get_json(force=True)
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    async def process():
-        await telegram_app.initialize()
-        update = Update.de_json(json_data, telegram_app.bot)
-        await telegram_app.process_update(update)
-    loop.run_until_complete(process())
-    return "OK", 200
-
 if __name__ == '__main__':
-    # Автоматически регистрируем вебхук в Telegram при старте сервера
-    try:
-        req.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={RENDER_URL}/{TELEGRAM_TOKEN}")
-    except Exception as e:
-        print(f"Set webhook error: {e}")
+    # Запускаем Flask-сервер в фоне для UptimeRobot
+    flask_thread = threading.Thread(target=run_flask)
+    flask_thread.daemon = True
+    flask_thread.start()
 
-    port = int(os.environ.get("PORT", 10000))
-    app_flask.run(host="0.0.0.0", port=port)
+    # Запускаем Телеграм-бота
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler((filters.TEXT | filters.PHOTO) & ~filters.COMMAND, handle_message))
+    # drop_pending_updates=True мгновенно сбрасывает старые зависшие запросы при старте
+    app.run_polling(drop_pending_updates=True)
