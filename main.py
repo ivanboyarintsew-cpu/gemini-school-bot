@@ -10,9 +10,6 @@ GEMINI_KEY = os.environ.get("GEMINI_KEY")
 
 ai_client = genai.Client(api_key=GEMINI_KEY)
 
-# Хранилище истории сообщений для каждого пользователя
-user_history = {}
-
 app_flask = Flask(__name__)
 
 @app_flask.route('/')
@@ -24,21 +21,13 @@ def run_flask():
     app_flask.run(host="0.0.0.0", port=port)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id in user_history:
-        del user_history[user_id]
-    await update.message.reply_text("Привет! Я твой ИИ-помощник с памятью и поддержкой фото. Напиши мне или отправь задание!")
+    await update.message.reply_text("Привет! Я твой ИИ-помощник. Напиши мне или отправь фото с заданием!")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    
-    if user_id not in user_history:
-        user_history[user_id] = []
-
     contents = []
     response_text = None
 
-    # Обработка фотографий
+    # Обработка фото
     if update.message.photo:
         try:
             photo_file = await update.message.photo[-1].get_file()
@@ -54,22 +43,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 },
                 caption
             ]
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Photo error: {e}")
 
-    # Обработка текстовых сообщений с историей
+    # Обработка текста
     elif update.message.text:
-        user_message = update.message.text
-        
-        # Собираем короткий контекст последних сообщений (до 4 штук)
-        history_snippet = "\n".join(user_history[user_id][-4:])
-        contents = f"{history_snippet}\nПользователь: {user_message}\nАссистент:"
-        
-        user_history[user_id].append(f"Пользователь: {user_message}")
+        contents = update.message.text
     else:
         return
 
-    # Каскад стабильных моделей
+    # Запрос к моделям Gemini
     models = ['gemini-2.5-flash', 'gemini-3.1-flash-lite', 'gemini-3.7-flash']
 
     for model_name in models:
@@ -81,19 +64,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if response and response.text:
                 response_text = response.text.strip()
                 break
-        except Exception:
+        except Exception as e:
+            print(f"Model {model_name} error: {e}")
             continue
 
     if response_text:
-        if update.message.text:
-            user_history[user_id].append(f"Ассистент: {response_text}")
-            # Ограничиваем длину истории, чтобы не перегружать запрос
-            if len(user_history[user_id]) > 10:
-                user_history[user_id] = user_history[user_id][-10:]
-                
         await update.message.reply_text(response_text)
     else:
-        await update.message.reply_text("Не удалось распознать или получить ответ. Попробуй еще раз!")
+        await update.message.reply_text("Не удалось получить ответ. Попробуй еще раз!")
 
 if __name__ == '__main__':
     flask_thread = threading.Thread(target=run_flask)
