@@ -10,8 +10,8 @@ GEMINI_KEY = os.environ.get("GEMINI_KEY")
 
 ai_client = genai.Client(api_key=GEMINI_KEY)
 
-# Хранилище сессий чата для пользователей
-user_chats = {}
+# Хранилище истории сообщений для каждого пользователя
+user_history = {}
 
 app_flask = Flask(__name__)
 
@@ -23,29 +23,28 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app_flask.run(host="0.0.0.0", port=port)
 
-def get_or_create_chat(user_id: int):
-    """Создает или возвращает существующий чат с памятью."""
-    if user_id not in user_chats:
-        user_chats[user_id] = ai_client.chats.create(model='gemini-2.5-flash')
-    return user_chats[user_id]
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if user_id in user_chats:
-        del user_chats[user_id]
-    await update.message.reply_text("Привет! Я твой ИИ-помощник с памятью диалога и поддержкой фото. Напиши вопрос или отправь задание!")
+    if user_id in user_history:
+        del user_history[user_id]
+    await update.message.reply_text("Привет! Я твой ИИ-помощник с памятью и поддержкой фото. Напиши мне или отправь задание!")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    
+    if user_id not in user_history:
+        user_history[user_id] = []
+
+    contents = []
     response_text = None
 
-    # Если отправлено фото
+    # Обработка фотографий
     if update.message.photo:
         try:
             photo_file = await update.message.photo[-1].get_file()
             photo_bytes = await photo_file.download_as_bytearray()
             caption = update.message.caption or "Реши это задание"
-
+            
             contents = [
                 {
                     "inline_data": {
@@ -55,44 +54,43 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 },
                 caption
             ]
-            
-            # Для фото используем прямое генеративное обращение
-            models = ['gemini-2.5-flash', 'gemini-3.1-flash-lite']
-            for model_name in models:
-                try:
-                    res = ai_client.models.generate_content(
-                        model=model_name,
-                        contents=contents
-                    )
-                    if res and res.text:
-                        response_text = res.text.strip()
-                        break
-                except Exception:
-                    continue
         except Exception:
             pass
 
-    # Если отправлен обычный текст
+    # Обработка текстовых сообщений с историей
     elif update.message.text:
-        user_text = update.message.text
+        user_message = update.message.text
         
-        # Пробуем через официальный чат-контекст с памятью
+        # Собираем короткий контекст последних сообщений (до 4 штук)
+        history_snippet = "\n".join(user_history[user_id][-4:])
+        contents = f"{history_snippet}\nПользователь: {user_message}\nАссистент:"
+        
+        user_history[user_id].append(f"Пользователь: {user_message}")
+    else:
+        return
+
+    # Каскад стабильных моделей
+    models = ['gemini-2.5-flash', 'gemini-3.1-flash-lite', 'gemini-3.7-flash']
+
+    for model_name in models:
         try:
-            chat = get_or_create_chat(user_id)
-            res = chat.send_message(user_text)
-            if res and res.text:
-                response_text = res.text.strip()
+            response = ai_client.models.generate_content(
+                model=model_name,
+                contents=contents
+            )
+            if response and response.text:
+                response_text = response.text.strip()
+                break
         except Exception:
-            # Если чат-сессия сбойнула, пересоздаем ее и пробуем еще раз
-            try:
-                user_chats[user_id] = ai_client.chats.create(model='gemini-2.5-flash')
-                res = user_chats[user_id].send_message(user_text)
-                if res and res.text:
-                    response_text = res.text.strip()
-            except Exception:
-                pass
+            continue
 
     if response_text:
+        if update.message.text:
+            user_history[user_id].append(f"Ассистент: {response_text}")
+            # Ограничиваем длину истории, чтобы не перегружать запрос
+            if len(user_history[user_id]) > 10:
+                user_history[user_id] = user_history[user_id][-10:]
+                
         await update.message.reply_text(response_text)
     else:
         await update.message.reply_text("Не удалось распознать или получить ответ. Попробуй еще раз!")
