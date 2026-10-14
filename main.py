@@ -10,7 +10,7 @@ GEMINI_KEY = os.environ.get("GEMINI_KEY")
 
 ai_client = genai.Client(api_key=GEMINI_KEY)
 
-# Хранилище истории диалогов: {user_id: "текст переписки"}
+# Хранилище сессий: {user_id: [список объектов для отправки модели]}
 user_sessions = {}
 
 app_flask = Flask(__name__)
@@ -27,17 +27,38 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id in user_sessions:
         del user_sessions[user_id]
-    await update.message.reply_text("Привет! Я твой ИИ-помощник с памятью. Задай мне любой вопрос!")
+    await update.message.reply_text("Привет! Я твой ИИ-помощник с памятью и поддержкой фото. Пришли мне картинку с заданием или задай вопрос!")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    user_message = update.message.text
-
+    
     if user_id not in user_sessions:
-        user_sessions[user_id] = ""
+        user_sessions[user_id] = []
 
-    # Формируем накопленный контекст диалога
-    prompt = user_sessions[user_id] + f"\nПользователь: {user_message}\nАссистент:"
+    contents = user_sessions[user_id]
+    
+    # Проверяем, прислал ли пользователь фото
+    if update.message.photo:
+        # Берем фото в самом высоком разрешении
+        photo_file = await update.message.photo[-1].get_file()
+        photo_bytes = await photo_file.download_as_bytearray()
+        
+        # Получаем подпись к фото (если есть) или стандартный текст
+        caption = update.message.caption or "Реши это задание на картинке"
+        
+        # Добавляем картинку и подпись в контекст
+        contents.append({
+            "inline_data": {
+                "mime_type": "image/jpeg",
+                "data": bytes(photo_bytes)
+            }
+        })
+        contents.append(caption)
+    elif update.message.text:
+        user_message = update.message.text
+        contents.append(user_message)
+    else:
+        return
 
     models = ['gemini-3.1-flash-lite', 'gemini-2.5-flash', 'gemini-3.7-flash']
     response_text = None
@@ -46,7 +67,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             response = ai_client.models.generate_content(
                 model=model_name,
-                contents=prompt
+                contents=contents
             )
             if response and response.text:
                 response_text = response.text.strip()
@@ -55,11 +76,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             continue
 
     if response_text:
-        # Сохраняем историю
-        user_sessions[user_id] = prompt + " " + response_text
+        # Сохраняем ответ модели в историю контекста
+        contents.append(response_text)
         await update.message.reply_text(response_text)
     else:
-        await update.message.reply_text("Не удалось получить ответ. Попробуй отправить сообщение ещё раз!")
+        # Если не получилось ответить, удаляем последнее добавленное сообщение
+        if contents:
+            contents.pop()
+        await update.message.reply_text("Не удалось распознать или получить ответ. Попробуй еще раз!")
 
 if __name__ == '__main__':
     flask_thread = threading.Thread(target=run_flask)
@@ -68,5 +92,6 @@ if __name__ == '__main__':
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    # Обрабатываем и текст, и фотографии
+    app.add_handler(MessageHandler((filters.TEXT | filters.PHOTO) & ~filters.COMMAND, handle_message))
     app.run_polling(drop_pending_updates=True)
