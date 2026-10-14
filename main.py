@@ -10,10 +10,9 @@ GEMINI_KEY = os.environ.get("GEMINI_KEY")
 
 ai_client = genai.Client(api_key=GEMINI_KEY)
 
-# Хранилище текстовой истории для каждого пользователя
-user_history = {}
+# Хранилище сессий чата для пользователей
+user_chats = {}
 
-# Создаем Flask-приложение, чтобы Render видел веб-сервис
 app_flask = Flask(__name__)
 
 @app_flask.route('/')
@@ -24,73 +23,85 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app_flask.run(host="0.0.0.0", port=port)
 
+def get_or_create_chat(user_id: int):
+    """Создает или возвращает существующий чат с памятью."""
+    if user_id not in user_chats:
+        user_chats[user_id] = ai_client.chats.create(model='gemini-2.5-flash')
+    return user_chats[user_id]
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if user_id in user_history:
-        del user_history[user_id]
-    await update.message.reply_text("Привет! Я твой ИИ-помощник с памятью и поддержкой фото. Напиши мне или отправь задание!")
+    if user_id in user_chats:
+        del user_chats[user_id]
+    await update.message.reply_text("Привет! Я твой ИИ-помощник с памятью диалога и поддержкой фото. Напиши вопрос или отправь задание!")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    
-    if user_id not in user_history:
-        user_history[user_id] = []
-
-    contents = []
-
-    # Проверяем, прислал ли пользователь фото
-    if update.message.photo:
-        photo_file = await update.message.photo[-1].get_file()
-        photo_bytes = await photo_file.download_as_bytearray()
-        caption = update.message.caption or "Реши это задание"
-        
-        contents = [
-            {
-                "inline_data": {
-                    "mime_type": "image/jpeg",
-                    "data": bytes(photo_bytes)
-                }
-            },
-            caption
-        ]
-    elif update.message.text:
-        user_message = update.message.text
-        history_text = "\n".join(user_history[user_id][-6:])
-        contents = f"{history_text}\nПользователь: {user_message}\nАссистент:"
-        
-        user_history[user_id].append(f"Пользователь: {user_message}")
-    else:
-        return
-
-    models = ['gemini-3.1-flash-lite', 'gemini-2.5-flash', 'gemini-3.7-flash']
     response_text = None
 
-    for model_name in models:
+    # Если отправлено фото
+    if update.message.photo:
         try:
-            response = ai_client.models.generate_content(
-                model=model_name,
-                contents=contents
-            )
-            if response and response.text:
-                response_text = response.text.strip()
-                break
-        except Exception as e:
-            continue
+            photo_file = await update.message.photo[-1].get_file()
+            photo_bytes = await photo_file.download_as_bytearray()
+            caption = update.message.caption or "Реши это задание"
+
+            contents = [
+                {
+                    "inline_data": {
+                        "mime_type": "image/jpeg",
+                        "data": bytes(photo_bytes)
+                    }
+                },
+                caption
+            ]
+            
+            # Для фото используем прямое генеративное обращение
+            models = ['gemini-2.5-flash', 'gemini-3.1-flash-lite']
+            for model_name in models:
+                try:
+                    res = ai_client.models.generate_content(
+                        model=model_name,
+                        contents=contents
+                    )
+                    if res and res.text:
+                        response_text = res.text.strip()
+                        break
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+    # Если отправлен обычный текст
+    elif update.message.text:
+        user_text = update.message.text
+        
+        # Пробуем через официальный чат-контекст с памятью
+        try:
+            chat = get_or_create_chat(user_id)
+            res = chat.send_message(user_text)
+            if res and res.text:
+                response_text = res.text.strip()
+        except Exception:
+            # Если чат-сессия сбойнула, пересоздаем ее и пробуем еще раз
+            try:
+                user_chats[user_id] = ai_client.chats.create(model='gemini-2.5-flash')
+                res = user_chats[user_id].send_message(user_text)
+                if res and res.text:
+                    response_text = res.text.strip()
+            except Exception:
+                pass
 
     if response_text:
-        if update.message.text:
-            user_history[user_id].append(f"Ассистент: {response_text}")
         await update.message.reply_text(response_text)
     else:
         await update.message.reply_text("Не удалось распознать или получить ответ. Попробуй еще раз!")
 
 if __name__ == '__main__':
-    # Запускаем Flask в отдельном потоке, чтобы он держал веб-сервер открытым
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.daemon = True
     flask_thread.start()
 
-    # Запуск Telegram-бота
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler((filters.TEXT | filters.PHOTO) & ~filters.COMMAND, handle_message))
