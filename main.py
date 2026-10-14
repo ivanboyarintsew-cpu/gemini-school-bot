@@ -33,8 +33,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_message = update.message.text
 
-    # Каскад актуальных моделей 3-го поколения
-    models_cascade = ['gemini-3.1-flash-lite', 'gemini-3.6-flash', 'gemini-3.5-flash-lite']
+    # Каскад: сначала 3.1 Flash Lite, а затем остальные резервные варианты
+    models_cascade = [
+        'gemini-3.1-flash-lite', 
+        'gemini-2.5-flash', 
+        'gemini-3.7-flash', 
+        'gemini-3.8-flash'
+    ]
 
     for model_name in models_cascade:
         try:
@@ -54,15 +59,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
         except Exception as e:
             error_str = str(e)
-            if any(err in error_str for err in ["429", "503", "RESOURCE_EXHAUSTED", "UNAVAILABLE", "NOT_FOUND"]):
-                if user_id in user_chats:
-                    del user_chats[user_id]
-                continue
-            else:
-                await update.message.reply_text(f"Ошибка: {e}")
-                return
+            if user_id in user_chats:
+                del user_chats[user_id]
+            continue
 
-    await update.message.reply_text("Все бесплатные лимиты моделей на сегодня исчерпаны. Попробуй позже!")
+    await update.message.reply_text("Произошла ошибка при обращении к ИИ. Попробуй отправить сообщение ещё раз!")
 
 if __name__ == '__main__':
     flask_thread = threading.Thread(target=run_flask)
