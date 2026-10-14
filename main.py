@@ -10,10 +10,9 @@ GEMINI_KEY = os.environ.get("GEMINI_KEY")
 
 ai_client = genai.Client(api_key=GEMINI_KEY)
 
-# Словарь для хранения истории чатов каждого пользователя: {user_id: chat_session}
+# Хранилище сессий чата для каждого пользователя
 user_chats = {}
 
-# Веб-сервер для поддержания активности на Render
 app_flask = Flask(__name__)
 
 @app_flask.route('/')
@@ -26,33 +25,44 @@ def run_flask():
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    # Сбрасываем историю при команде /start
     if user_id in user_chats:
         del user_chats[user_id]
-    await update.message.reply_text("Привет! Я быстрый ИИ-помощник с доступом к интернету и памятью. Задай мне любой вопрос!")
+    await update.message.reply_text("Привет! Я быстрый ИИ-помощник с памятью и доступом к Google Поиску. Спроси меня о чём угодно!")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_message = update.message.text
 
-    try:
-        # Если у этого пользователя еще нет активной сессии чата, создаем её
-        if user_id not in user_chats:
-            user_chats[user_id] = ai_client.chats.create(model="gemini-3.1-flash-lite")
-        
-        chat_session = user_chats[user_id]
+    # Каскад актуальных моделей 3-го поколения
+    models_cascade = ['gemini-3.1-flash-lite', 'gemini-3.6-flash', 'gemini-3.5-flash-lite']
 
-        # Отправляем сообщение в рамках истории сессии с поддержкой поиска в Google
-        response = chat_session.send_message(
-            user_message,
-            config={
-                "tools": [{"google_search": {}}]
-            }
-        )
-        
-        await update.message.reply_text(response.text)
-    except Exception as e:
-        await update.message.reply_text(f"Ошибка: {e}")
+    for model_name in models_cascade:
+        try:
+            if user_id not in user_chats:
+                user_chats[user_id] = ai_client.chats.create(model=model_name)
+            
+            chat_session = user_chats[user_id]
+
+            response = chat_session.send_message(
+                user_message,
+                config={
+                    "tools": [{"google_search": {}}]
+                }
+            )
+            await update.message.reply_text(response.text)
+            return  
+            
+        except Exception as e:
+            error_str = str(e)
+            if any(err in error_str for err in ["429", "503", "RESOURCE_EXHAUSTED", "UNAVAILABLE", "NOT_FOUND"]):
+                if user_id in user_chats:
+                    del user_chats[user_id]
+                continue
+            else:
+                await update.message.reply_text(f"Ошибка: {e}")
+                return
+
+    await update.message.reply_text("Все бесплатные лимиты моделей на сегодня исчерпаны. Попробуй позже!")
 
 if __name__ == '__main__':
     flask_thread = threading.Thread(target=run_flask)
