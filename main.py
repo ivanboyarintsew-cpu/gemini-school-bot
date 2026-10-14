@@ -6,10 +6,9 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 TELEGRAM_TOKEN = "8873295583:AAFkxlPOzOtkjbBuHAQFEVSlL37YB8cBWO8"
-
-# Проверяем оба возможных варианта имени переменной с ключом
 GEMINI_KEY = os.environ.get("GEMINI_KEY") or os.environ.get("GEMINI_API_KEY")
 
+# Инициализация клиента нового SDK
 ai_client = genai.Client(api_key=GEMINI_KEY)
 
 app_flask = Flask(__name__)
@@ -23,49 +22,51 @@ def run_flask():
     app_flask.run(host="0.0.0.0", port=port)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привет! Я на связи. Напиши мне вопрос.")
+    await update.message.reply_text("Привет! Бот на связи и использует модель gemini-3.1-flash-lite. Отправь текст или фото!")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    response_text = None
     contents = []
+    response_text = None
 
+    # Обработка фотографий
     if update.message.photo:
         try:
             photo_file = await update.message.photo[-1].get_file()
             photo_bytes = await photo_file.download_as_bytearray()
             caption = update.message.caption or "Реши это задание"
             contents = [
-                {"inline_data": {"mime_type": "image/jpeg", "data": bytes(photo_bytes)}},
+                {
+                    "inline_data": {
+                        "mime_type": "image/jpeg",
+                        "data": bytes(photo_bytes)
+                    }
+                },
                 caption
             ]
         except Exception as e:
             print(f"Photo error: {e}")
+
+    # Обработка текста
     elif update.message.text:
         contents = update.message.text
     else:
         return
 
-    # Пробуем самые надежные названия моделей для нового SDK
-    models = ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-2.0-flash-exp']
-
-    for model_name in models:
-        try:
-            response = ai_client.models.generate_content(
-                model=model_name,
-                contents=contents
-            )
-            if response and response.text:
-                response_text = response.text.strip()
-                break
-        except Exception as e:
-            # Выводим точную ошибку в логи Render, чтобы увидеть причину
-            print(f"Ошибка с моделью {model_name}: {e}")
-            continue
+    # Запрос к модели 3-го поколения через новый SDK
+    try:
+        response = ai_client.models.generate_content(
+            model='gemini-3.1-flash-lite',
+            contents=contents
+        )
+        if response and response.text:
+            response_text = response.text.strip()
+    except Exception as e:
+        print(f"GenAI Error: {e}")
 
     if response_text:
         await update.message.reply_text(response_text)
     else:
-        await update.message.reply_text("Не удалось получить ответ. Проверь логи Render!")
+        await update.message.reply_text("Не удалось получить ответ. Попробуй еще раз!")
 
 if __name__ == '__main__':
     flask_thread = threading.Thread(target=run_flask)
