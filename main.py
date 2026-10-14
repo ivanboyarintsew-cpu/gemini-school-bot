@@ -6,7 +6,9 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 TELEGRAM_TOKEN = "8873295583:AAFkxlPOzOtkjbBuHAQFEVSlL37YB8cBWO8"
-GEMINI_KEY = os.environ.get("GEMINI_KEY")
+
+# Проверяем оба возможных варианта имени переменной с ключом
+GEMINI_KEY = os.environ.get("GEMINI_KEY") or os.environ.get("GEMINI_API_KEY")
 
 ai_client = genai.Client(api_key=GEMINI_KEY)
 
@@ -21,39 +23,30 @@ def run_flask():
     app_flask.run(host="0.0.0.0", port=port)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привет! Я твой ИИ-помощник. Напиши мне или отправь фото с заданием!")
+    await update.message.reply_text("Привет! Я на связи. Напиши мне вопрос.")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    contents = []
     response_text = None
+    contents = []
 
-    # Обработка фото
     if update.message.photo:
         try:
             photo_file = await update.message.photo[-1].get_file()
             photo_bytes = await photo_file.download_as_bytearray()
             caption = update.message.caption or "Реши это задание"
-            
             contents = [
-                {
-                    "inline_data": {
-                        "mime_type": "image/jpeg",
-                        "data": bytes(photo_bytes)
-                    }
-                },
+                {"inline_data": {"mime_type": "image/jpeg", "data": bytes(photo_bytes)}},
                 caption
             ]
         except Exception as e:
             print(f"Photo error: {e}")
-
-    # Обработка текста
     elif update.message.text:
         contents = update.message.text
     else:
         return
 
-    # Запрос к моделям Gemini
-    models = ['gemini-2.5-flash', 'gemini-3.1-flash-lite', 'gemini-3.7-flash']
+    # Пробуем самые надежные названия моделей для нового SDK
+    models = ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-2.0-flash-exp']
 
     for model_name in models:
         try:
@@ -65,13 +58,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 response_text = response.text.strip()
                 break
         except Exception as e:
-            print(f"Model {model_name} error: {e}")
+            # Выводим точную ошибку в логи Render, чтобы увидеть причину
+            print(f"Ошибка с моделью {model_name}: {e}")
             continue
 
     if response_text:
         await update.message.reply_text(response_text)
     else:
-        await update.message.reply_text("Не удалось получить ответ. Попробуй еще раз!")
+        await update.message.reply_text("Не удалось получить ответ. Проверь логи Render!")
 
 if __name__ == '__main__':
     flask_thread = threading.Thread(target=run_flask)
