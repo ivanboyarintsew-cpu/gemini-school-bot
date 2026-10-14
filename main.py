@@ -8,7 +8,6 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 TELEGRAM_TOKEN = "8873295583:AAFkxlPOzOtkjbBuHAQFEVSlL37YB8cBWO8"
 GEMINI_KEY = os.environ.get("GEMINI_KEY") or os.environ.get("GEMINI_API_KEY")
 
-# Инициализация клиента нового SDK
 ai_client = genai.Client(api_key=GEMINI_KEY)
 
 app_flask = Flask(__name__)
@@ -22,13 +21,12 @@ def run_flask():
     app_flask.run(host="0.0.0.0", port=port)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привет! Бот на связи и использует модель gemini-3.1-flash-lite. Отправь текст или фото!")
+    await update.message.reply_text("Привет! Я на связи и готов помочь с учебой.")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     contents = []
     response_text = None
 
-    # Обработка фотографий
     if update.message.photo:
         try:
             photo_file = await update.message.photo[-1].get_file()
@@ -45,14 +43,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
         except Exception as e:
             print(f"Photo error: {e}")
-
-    # Обработка текста
     elif update.message.text:
         contents = update.message.text
     else:
         return
 
-    # Запрос к модели 3-го поколения через новый SDK
     try:
         response = ai_client.models.generate_content(
             model='gemini-3.1-flash-lite',
@@ -76,4 +71,6 @@ if __name__ == '__main__':
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler((filters.TEXT | filters.PHOTO) & ~filters.COMMAND, handle_message))
+    
+    # drop_pending_updates=True сбрасывает старые зависшие запросы при перезапуске
     app.run_polling(drop_pending_updates=True)
