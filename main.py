@@ -10,8 +10,8 @@ GEMINI_KEY = os.environ.get("GEMINI_KEY")
 
 ai_client = genai.Client(api_key=GEMINI_KEY)
 
-# Хранилище сессий: {user_id: [список объектов для отправки модели]}
-user_sessions = {}
+# Хранилище текстовой истории для каждого пользователя
+user_history = {}
 
 app_flask = Flask(__name__)
 
@@ -25,38 +25,40 @@ def run_flask():
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if user_id in user_sessions:
-        del user_sessions[user_id]
-    await update.message.reply_text("Привет! Я твой ИИ-помощник с памятью и поддержкой фото. Пришли мне картинку с заданием или задай вопрос!")
+    if user_id in user_history:
+        del user_history[user_id]
+    await update.message.reply_text("Привет! Я твой ИИ-помощник. Отправь мне фото с заданием или напиши вопрос!")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
-    if user_id not in user_sessions:
-        user_sessions[user_id] = []
+    if user_id not in user_history:
+        user_history[user_id] = []
 
-    contents = user_sessions[user_id]
-    
+    contents = []
+
     # Проверяем, прислал ли пользователь фото
     if update.message.photo:
-        # Берем фото в самом высоком разрешении
         photo_file = await update.message.photo[-1].get_file()
         photo_bytes = await photo_file.download_as_bytearray()
+        caption = update.message.caption or "Реши это задание"
         
-        # Получаем подпись к фото (если есть) или стандартный текст
-        caption = update.message.caption or "Реши это задание на картинке"
-        
-        # Добавляем картинку и подпись в контекст
-        contents.append({
-            "inline_data": {
-                "mime_type": "image/jpeg",
-                "data": bytes(photo_bytes)
-            }
-        })
-        contents.append(caption)
+        contents = [
+            {
+                "inline_data": {
+                    "mime_type": "image/jpeg",
+                    "data": bytes(photo_bytes)
+                }
+            },
+            caption
+        ]
     elif update.message.text:
         user_message = update.message.text
-        contents.append(user_message)
+        # Добавляем контекст предыдущих сообщений для памяти
+        history_text = "\n".join(user_history[user_id][-6:]) # берем последние 6 сообщений
+        contents = f"{history_text}\nПользователь: {user_message}\nАссистент:"
+        
+        user_history[user_id].append(f"Пользователь: {user_message}")
     else:
         return
 
@@ -76,13 +78,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             continue
 
     if response_text:
-        # Сохраняем ответ модели в историю контекста
-        contents.append(response_text)
+        if update.message.text:
+            user_history[user_id].append(f"Ассистент: {response_text}")
         await update.message.reply_text(response_text)
     else:
-        # Если не получилось ответить, удаляем последнее добавленное сообщение
-        if contents:
-            contents.pop()
         await update.message.reply_text("Не удалось распознать или получить ответ. Попробуй еще раз!")
 
 if __name__ == '__main__':
@@ -92,6 +91,5 @@ if __name__ == '__main__':
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    # Обрабатываем и текст, и фотографии
     app.add_handler(MessageHandler((filters.TEXT | filters.PHOTO) & ~filters.COMMAND, handle_message))
     app.run_polling(drop_pending_updates=True)
